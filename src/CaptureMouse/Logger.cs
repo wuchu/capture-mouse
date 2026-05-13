@@ -6,6 +6,18 @@ using System.Threading;
 namespace CaptureMouse;
 
 /// <summary>
+/// 日志级别
+/// </summary>
+public enum LogLevel
+{
+    Debug,
+    Info,
+    Warning,
+    Error,
+    Fatal
+}
+
+/// <summary>
 /// 日志记录器
 /// </summary>
 public static class Logger
@@ -152,4 +164,26 @@ public static class Logger
     {
         var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
         var threadId = Thread.CurrentThread.ManagedThreadId;
-        var logLine = $
+        var levelStr = level.ToString().ToUpper();
+        var logLine = $"{timestamp} [{levelStr}] [{threadId}] {message}";
+
+        lock (_lock)
+        {
+            // 输出到控制台
+            Console.WriteLine(logLine);
+
+            // 写入文件
+            if (_logFile != null)
+            {
+                try
+                {
+                    File.AppendAllText(_logFile, logLine + Environment.NewLine);
+                }
+                catch
+                {
+                    // 忽略文件写入错误
+                }
+            }
+        }
+    }
+}
