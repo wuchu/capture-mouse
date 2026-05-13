@@ -1,0 +1,75 @@
+name: Build Windows x64
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '9.0.x'
+    
+    - name: Restore dependencies
+      run: dotnet restore src/CaptureMouse/CaptureMouse.csproj
+    
+    - name: Build
+      run: dotnet build src/CaptureMouse/CaptureMouse.csproj --configuration Release --no-restore
+    
+    - name: Publish x64
+      run: |
+        dotnet publish src/CaptureMouse/CaptureMouse.csproj `
+          --configuration Release `
+          --runtime win-x64 `
+          --self-contained true `
+          --output ./publish/x64 `
+          --property:PublishSingleFile=true `
+          --property:PublishTrimmed=true `
+          --property:EnableCompressionInSingleFile=true `
+          --no-build
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: CaptureMouse-win-x64
+        path: ./publish/x64/*.exe
+    
+    - name: Create Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v0.1.0-iter1
+        name: CaptureMouse Iteration 1
+        body: |
+          ## CaptureMouse 迭代一
+          
+          基础功能：VNC 连接 + 输入捕获
+          
+          ### 功能
+          - ✅ VNC 客户端连接 macOS
+          - ✅ Raw Input 全局键鼠捕获
+          - ✅ 键鼠事件转发到 macOS
+          
+          ### 使用方法
+          1. 在 macOS 上开启屏幕共享
+          2. 运行 CaptureMouse.exe
+          3. 输入 macOS IP 和密码
+          4. 选择测试模式
+          
+          ### 系统要求
+          - Windows 11 x64
+          - macOS 10.15+（开启屏幕共享）
+        files: ./publish/x64/CaptureMouse.exe
+        draft: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
