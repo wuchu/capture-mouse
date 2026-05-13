@@ -34,9 +34,7 @@ jobs:
           --runtime win-x64 `
           --self-contained true `
           --output ./publish/x64 `
-          -p:PublishSingleFile=true `
-          -p:PublishTrimmed=true `
-          -p:EnableCompressionInSingleFile=true
+          -p:PublishSingleFile=true
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4

@@ -39,10 +39,7 @@ dotnet publish src\CaptureMouse\CaptureMouse.csproj ^
     --runtime win-x64 ^
     --self-contained true ^
     --output .\publish\x64 ^
-    --property:PublishSingleFile=true ^
-    --property:PublishTrimmed=true ^
-    --property:EnableCompressionInSingleFile=true ^
-    --no-build
+    --property:PublishSingleFile=true
 
 if %errorlevel% neq 0 (
     echo [错误] 发布失败
