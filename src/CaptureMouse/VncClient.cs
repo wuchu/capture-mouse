@@ -36,6 +36,11 @@ public class VncClient : IDisposable
     /// </summary>
     private byte _currentButtonMask;
 
+    /// <summary>
+    /// 认证用户名（macOS 用户名）
+    /// </summary>
+    private string _username = "";
+
     public bool IsConnected => _tcpClient?.Connected ?? false;
     public int ScreenWidth { get; private set; }
     public int ScreenHeight { get; private set; }
@@ -46,10 +51,11 @@ public class VncClient : IDisposable
     /// <summary>
     /// 连接到 VNC 服务器
     /// </summary>
-    public async Task<bool> ConnectAsync(string host, int port, string password, CancellationToken ct = default)
+    public async Task<bool> ConnectAsync(string host, int port, string username, string password, CancellationToken ct = default)
     {
         try
         {
+            _username = username;
             Logger.Info($"正在连接到 {host}:{port}...");
             _tcpClient = new TcpClient();
             await _tcpClient.ConnectAsync(host, port, ct);
@@ -296,11 +302,20 @@ public class VncClient : IDisposable
         byte[] securityTypes = await ReadExactAsync(securityCount, ct);
         Logger.Info($"服务器支持的认证类型: {BitConverter.ToString(securityTypes)}");
 
-        // 检查支持的认证类型
-        bool supportsVncAuth = Array.Exists(securityTypes, t => t == 2);
-        bool supportsNone = Array.Exists(securityTypes, t => t == 1);
+        // 检查支持的认证类型（按优先级）
+        bool supportsAppleAuth = Array.Exists(securityTypes, t => t == 30);  // Apple DH
+        bool supportsVncAuth = Array.Exists(securityTypes, t => t == 2);    // Standard VNC
+        bool supportsNone = Array.Exists(securityTypes, t => t == 1);       // None
 
-        if (supportsVncAuth)
+        if (supportsAppleAuth)
+        {
+            // Apple VNC 认证 (类型 30) - macOS Screen Sharing 默认
+            Logger.Debug("选择 Apple VNC 认证 (类型 30)");
+            await _stream!.WriteAsync(new byte[] { 30 }, ct);
+
+            return await AppleVncAuth.AuthenticateAsync(_stream!, _username, password, ct);
+        }
+        else if (supportsVncAuth)
         {
             // 选择 VNC 认证 (类型 2)
             Logger.Debug("选择 VNC 认证 (类型 2)");

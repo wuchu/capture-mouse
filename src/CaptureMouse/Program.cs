@@ -402,7 +402,11 @@ class Program
             return;
         }
 
-        Console.Write("输入 VNC 密码: ");
+        Console.Write("输入 macOS 用户名: ");
+        var username = Console.ReadLine();
+        Logger.Info($"用户输入用户名: {username}");
+
+        Console.Write("输入 macOS 密码: ");
         var password = ReadPassword();
         
         if (string.IsNullOrWhiteSpace(password))
@@ -417,9 +421,9 @@ class Program
 
         try
         {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             Logger.Debug("调用 ConnectAsync...");
-            var success = vncClient.ConnectAsync(host, 5900, password, cts.Token).Result;
+            var success = vncClient.ConnectAsync(host, 5900, username ?? "", password, cts.Token).Result;
 
             if (success)
             {
