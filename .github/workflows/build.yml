@@ -29,14 +29,10 @@ jobs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '9.0.x'
+        cache: true
+        cache-dependency-path: src/CaptureMouse/CaptureMouse.csproj
     
-    - name: Restore dependencies
-      run: dotnet restore src/CaptureMouse/CaptureMouse.csproj
-    
-    - name: Build
-      run: dotnet build src/CaptureMouse/CaptureMouse.csproj --configuration Release --no-restore
-    
-    - name: Publish x64
+    - name: Restore & Build & Publish
       shell: pwsh
       run: |
         dotnet publish src/CaptureMouse/CaptureMouse.csproj `
@@ -51,6 +47,3 @@ jobs:
       with:
         name: CaptureMouse-win-x64
         path: ./publish/x64/*.exe
-    
-    # Note: Release creation disabled due to permission issues
-    # You can manually create a release and upload the artifact
