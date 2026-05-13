@@ -27,16 +27,16 @@ jobs:
       run: dotnet build src/CaptureMouse/CaptureMouse.csproj --configuration Release --no-restore
     
     - name: Publish x64
+      shell: pwsh
       run: |
         dotnet publish src/CaptureMouse/CaptureMouse.csproj `
           --configuration Release `
           --runtime win-x64 `
           --self-contained true `
           --output ./publish/x64 `
-          --property:PublishSingleFile=true `
-          --property:PublishTrimmed=true `
-          --property:EnableCompressionInSingleFile=true `
-          --no-build
+          -p:PublishSingleFile=true `
+          -p:PublishTrimmed=true `
+          -p:EnableCompressionInSingleFile=true
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
