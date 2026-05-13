@@ -21,6 +21,34 @@ Windows PC                          macOS
 └─ TrayIcon (系统托盘)
 ```
 
+## 📋 项目进展
+
+| 迭代 | 功能 | 状态 | 文档 |
+|------|------|------|------|
+| 一 | 基础连接层 - VNC 协议实现 | ✅ 已完成 | [spec-01](docs/spec-01-connection.md) |
+| 二 | 输入捕获层 - Raw Input | ✅ 已完成 | [spec-02](docs/spec-02-input-capture.md) |
+| 三 | 控制权切换 - 快捷键 | 🚧 进行中 | [spec-03](docs/spec-03-control-switch.md) |
+| 四 | 优化完善 - 重连/配置 | 📅 待开始 | [spec-04](docs/spec-04-optimization.md) |
+| 五 | 打包部署 - 单文件 | 📅 待开始 | [spec-05](docs/spec-05-deployment.md) |
+
+### 当前完成的功能
+
+- ✅ VNC 客户端连接 macOS Screen Sharing
+- ✅ RFB 3.8 协议握手和认证
+- ✅ 键鼠事件发送（鼠标移动、点击、滚轮、键盘按键）
+- ✅ Windows Raw Input 全局输入捕获
+- ✅ 键码映射（Windows → X11 KeySym）
+- ✅ GitHub Actions 自动构建
+- ✅ 单文件发布配置
+
+### 待实现功能
+
+- 🚧 全局快捷键切换控制模式
+- 🚧 系统托盘图标和状态显示
+- 🚧 配置持久化
+- 🚧 连接断线重连
+- 🚧 边缘检测自动切换
+
 ## 📋 迭代计划
 
 | 迭代 | 功能 | 文档 |
@@ -105,4 +133,8 @@ MIT License
 
 ---
 
-**注意**: 本项目目前处于设计阶段，代码尚未完成。
+**注意**: 迭代一、二已完成，代码已提交。迭代三（快捷键切换）进行中。
+
+### 构建状态
+
+[![Build Windows x64](https://github.com/wuchu/capture-mouse/actions/workflows/build.yml/badge.svg)](https://github.com/wuchu/capture-mouse/actions/workflows/build.yml)
