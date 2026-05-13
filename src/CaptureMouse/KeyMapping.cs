@@ -12,15 +12,15 @@ public static class KeyMapping
     {
         // 字母 A-Z
         if (vkCode >= 0x41 && vkCode <= 0x5A)
-            return vkCode + 0x20; // 转换为小写 ASCII
+            return (uint)(vkCode + 0x20); // 转换为小写 ASCII
 
         // 数字 0-9
         if (vkCode >= 0x30 && vkCode <= 0x39)
-            return vkCode; // ASCII 数字
+            return (uint)vkCode; // ASCII 数字
 
         // 功能键 F1-F12
         if (vkCode >= 0x70 && vkCode <= 0x7B)
-            return 0xFFBE + (vkCode - 0x70); // XK_F1 - XK_F12
+            return (uint)(0xFFBE + (vkCode - 0x70)); // XK_F1 - XK_F12
 
         // 特殊键映射
         return vkCode switch
