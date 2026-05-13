@@ -14,6 +14,7 @@ public class InputCapture : NativeWindow, IDisposable
 
     private const uint RIDEV_INPUTSINK = 0x00000100;
     private const uint RIDEV_DEVNOTIFY = 0x00002000;
+    private const uint RIDEV_REMOVE = 0x00000001;
     private const uint RID_INPUT = 0x10000003;
     private const uint RIM_TYPEMOUSE = 0;
     private const uint RIM_TYPEKEYBOARD = 1;
@@ -36,12 +37,15 @@ public class InputCapture : NativeWindow, IDisposable
         public IntPtr wParam;
     }
 
+    // RAWMOUSE 的正确结构定义
+    // usButtonFlags 和 usButtonData 是 union 的一部分
+    // 参考: https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-rawmouse
     [StructLayout(LayoutKind.Sequential)]
     private struct RAWMOUSE
     {
         public ushort usFlags;
-        public ushort usButtonFlags;
-        public ushort usButtonData;
+        // union { ULONG ulButtons; struct { USHORT usButtonFlags; USHORT usButtonData; }; }
+        public uint ulButtons;          // 整个 union 作为 ULONG
         public uint ulRawButtons;
         public int lLastX;
         public int lLastY;
@@ -91,7 +95,7 @@ public class InputCapture : NativeWindow, IDisposable
         public int Y;
     }
 
-    // 鼠标按钮标志
+    // 鼠标按钮标志 (从 ulButtons 的低16位提取)
     private const ushort RI_MOUSE_LEFT_BUTTON_DOWN = 0x0001;
     private const ushort RI_MOUSE_LEFT_BUTTON_UP = 0x0002;
     private const ushort RI_MOUSE_RIGHT_BUTTON_DOWN = 0x0004;
@@ -113,6 +117,10 @@ public class InputCapture : NativeWindow, IDisposable
     private DateTime _lastMouseMove = DateTime.MinValue;
     private readonly TimeSpan _mouseThrottle = TimeSpan.FromMilliseconds(8); // ~120fps
 
+    // 当前鼠标位置（用于 VNC 坐标映射）
+    private int _currentMouseX;
+    private int _currentMouseY;
+
     /// <summary>
     /// 输入事件
     /// </summary>
@@ -126,12 +134,22 @@ public class InputCapture : NativeWindow, IDisposable
     /// <summary>
     /// 是否捕获鼠标
     /// </summary>
-    public bool CaptureMouse { get; set; } = true;
+    public bool CaptureMouseInput { get; set; } = true;
 
     /// <summary>
     /// 是否捕获键盘
     /// </summary>
     public bool CaptureKeyboard { get; set; } = true;
+
+    /// <summary>
+    /// 获取当前鼠标 X 坐标
+    /// </summary>
+    public int CurrentMouseX => _currentMouseX;
+
+    /// <summary>
+    /// 获取当前鼠标 Y 坐标
+    /// </summary>
+    public int CurrentMouseY => _currentMouseY;
 
     /// <summary>
     /// 开始捕获
@@ -140,19 +158,22 @@ public class InputCapture : NativeWindow, IDisposable
     {
         if (_isCapturing) return true;
 
+        Logger.Info("启动输入捕获...");
+
         try
         {
             // 创建消息窗口
             CreateHandle(new CreateParams
             {
-                ExStyle = 0x80, // WS_EX_TOOLWINDOW ( invisible )
+                ExStyle = 0x80, // WS_EX_TOOLWINDOW (invisible)
                 Style = unchecked((int)0x80000000) // WS_POPUP
             });
+            Logger.Debug($"消息窗口已创建, Handle={Handle}");
 
             var devices = new List<RAWINPUTDEVICE>();
 
             // 注册鼠标设备
-            if (CaptureMouse)
+            if (CaptureMouseInput)
             {
                 devices.Add(new RAWINPUTDEVICE
                 {
@@ -161,6 +182,7 @@ public class InputCapture : NativeWindow, IDisposable
                     dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
                     hwndTarget = this.Handle
                 });
+                Logger.Debug("已注册鼠标设备");
             }
 
             // 注册键盘设备
@@ -173,9 +195,14 @@ public class InputCapture : NativeWindow, IDisposable
                     dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY,
                     hwndTarget = this.Handle
                 });
+                Logger.Debug("已注册键盘设备");
             }
 
-            if (devices.Count == 0) return false;
+            if (devices.Count == 0)
+            {
+                Logger.Warning("没有注册任何输入设备");
+                return false;
+            }
 
             var result = RegisterRawInputDevices(
                 devices.ToArray(),
@@ -184,17 +211,18 @@ public class InputCapture : NativeWindow, IDisposable
 
             if (!result)
             {
-                Console.WriteLine("注册 Raw Input 设备失败");
+                int error = Marshal.GetLastWin32Error();
+                Logger.Error($"注册 Raw Input 设备失败, Win32 错误码: {error}");
                 return false;
             }
 
             _isCapturing = true;
-            Console.WriteLine("输入捕获已启动");
+            Logger.Info("输入捕获已启动");
             return true;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"启动捕获失败: {ex.Message}");
+            Logger.Error("启动捕获失败", ex);
             return false;
         }
     }
@@ -206,18 +234,40 @@ public class InputCapture : NativeWindow, IDisposable
     {
         if (!_isCapturing) return;
 
+        Logger.Info("停止输入捕获...");
         _isCapturing = false;
 
-        // 注销设备
-        var devices = new RAWINPUTDEVICE[]
+        // 注销设备 - 使用 RIDEV_REMOVE 标志
+        var devices = new List<RAWINPUTDEVICE>();
+
+        if (CaptureMouseInput)
         {
-            new() { usUsagePage = 0x01, usUsage = 0x02, dwFlags = 0, hwndTarget = IntPtr.Zero },
-            new() { usUsagePage = 0x01, usUsage = 0x06, dwFlags = 0, hwndTarget = IntPtr.Zero }
-        };
+            devices.Add(new RAWINPUTDEVICE
+            {
+                usUsagePage = 0x01,
+                usUsage = 0x02,
+                dwFlags = RIDEV_REMOVE,
+                hwndTarget = IntPtr.Zero
+            });
+        }
 
-        RegisterRawInputDevices(devices, (uint)devices.Length, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
+        if (CaptureKeyboard)
+        {
+            devices.Add(new RAWINPUTDEVICE
+            {
+                usUsagePage = 0x01,
+                usUsage = 0x06,
+                dwFlags = RIDEV_REMOVE,
+                hwndTarget = IntPtr.Zero
+            });
+        }
 
-        Console.WriteLine("输入捕获已停止");
+        if (devices.Count > 0)
+        {
+            RegisterRawInputDevices(devices.ToArray(), (uint)devices.Count, (uint)Marshal.SizeOf<RAWINPUTDEVICE>());
+        }
+
+        Logger.Info("输入捕获已停止");
     }
 
     /// <summary>
@@ -238,7 +288,7 @@ public class InputCapture : NativeWindow, IDisposable
                 break;
 
             case WM_INPUT_DEVICE_CHANGE:
-                Console.WriteLine("输入设备变更");
+                Logger.Debug("输入设备变更");
                 break;
         }
 
@@ -274,6 +324,10 @@ public class InputCapture : NativeWindow, IDisposable
                 }
             }
         }
+        catch (Exception ex)
+        {
+            Logger.Error("处理 RawInput 失败", ex);
+        }
         finally
         {
             Marshal.FreeHGlobal(buffer);
@@ -287,16 +341,18 @@ public class InputCapture : NativeWindow, IDisposable
     {
         // 获取当前鼠标位置
         GetCursorPos(out var pt);
+        _currentMouseX = pt.X;
+        _currentMouseY = pt.Y;
+
+        // 从 ulButtons 提取 usButtonFlags (低16位) 和 usButtonData (高16位)
+        ushort buttonFlags = (ushort)(mouse.ulButtons & 0xFFFF);
+        ushort buttonData = (ushort)((mouse.ulButtons >> 16) & 0xFFFF);
 
         // 处理鼠标移动
         if ((mouse.usFlags & 0x01) == 0) // 不是绝对模式
         {
             // 节流鼠标移动事件
-            if (DateTime.Now - _lastMouseMove < _mouseThrottle)
-            {
-                // 仍然更新位置，但不触发事件
-            }
-            else
+            if (DateTime.Now - _lastMouseMove >= _mouseThrottle)
             {
                 _lastMouseMove = DateTime.Now;
 
@@ -311,10 +367,10 @@ public class InputCapture : NativeWindow, IDisposable
         }
 
         // 处理鼠标按键
-        if (mouse.usButtonFlags != 0)
+        if (buttonFlags != 0)
         {
             // 左键
-            if ((mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN) != 0)
+            if ((buttonFlags & RI_MOUSE_LEFT_BUTTON_DOWN) != 0)
             {
                 InputReceived?.Invoke(this, new InputEvent
                 {
@@ -322,10 +378,10 @@ public class InputCapture : NativeWindow, IDisposable
                     Timestamp = InputEvent.GetTimestamp(),
                     X = pt.X,
                     Y = pt.Y,
-                    Button = 1
+                    Button = 1  // VNC 左键 = 1
                 });
             }
-            if ((mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP) != 0)
+            if ((buttonFlags & RI_MOUSE_LEFT_BUTTON_UP) != 0)
             {
                 InputReceived?.Invoke(this, new InputEvent
                 {
@@ -338,7 +394,7 @@ public class InputCapture : NativeWindow, IDisposable
             }
 
             // 右键
-            if ((mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) != 0)
+            if ((buttonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) != 0)
             {
                 InputReceived?.Invoke(this, new InputEvent
                 {
@@ -349,7 +405,7 @@ public class InputCapture : NativeWindow, IDisposable
                     Button = 4  // VNC 右键 = 4
                 });
             }
-            if ((mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP) != 0)
+            if ((buttonFlags & RI_MOUSE_RIGHT_BUTTON_UP) != 0)
             {
                 InputReceived?.Invoke(this, new InputEvent
                 {
@@ -362,7 +418,7 @@ public class InputCapture : NativeWindow, IDisposable
             }
 
             // 中键
-            if ((mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN) != 0)
+            if ((buttonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN) != 0)
             {
                 InputReceived?.Invoke(this, new InputEvent
                 {
@@ -373,7 +429,7 @@ public class InputCapture : NativeWindow, IDisposable
                     Button = 2  // VNC 中键 = 2
                 });
             }
-            if ((mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_UP) != 0)
+            if ((buttonFlags & RI_MOUSE_MIDDLE_BUTTON_UP) != 0)
             {
                 InputReceived?.Invoke(this, new InputEvent
                 {
@@ -386,9 +442,9 @@ public class InputCapture : NativeWindow, IDisposable
             }
 
             // 滚轮
-            if ((mouse.usButtonFlags & RI_MOUSE_WHEEL) != 0)
+            if ((buttonFlags & RI_MOUSE_WHEEL) != 0)
             {
-                short wheelDelta = (short)mouse.usButtonData;
+                short wheelDelta = (short)buttonData;
                 InputReceived?.Invoke(this, new InputEvent
                 {
                     Type = InputEventType.MouseWheel,
@@ -426,7 +482,10 @@ public class InputCapture : NativeWindow, IDisposable
         if (_disposed) return;
 
         StopCapture();
-        DestroyHandle();
+        if (Handle != IntPtr.Zero)
+        {
+            DestroyHandle();
+        }
 
         _disposed = true;
     }

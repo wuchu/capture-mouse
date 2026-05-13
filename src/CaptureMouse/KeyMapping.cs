@@ -2,29 +2,45 @@ namespace CaptureMouse;
 
 /// <summary>
 /// Windows 虚拟键码到 X11 KeySym 的映射
+/// 参考: https://www.x.org/releases/X11R7.7/doc/xproto/x11protocol.html#keysym_encoding
 /// </summary>
 public static class KeyMapping
 {
     /// <summary>
     /// 将 Windows 虚拟键码转换为 X11 KeySym
     /// </summary>
+    /// <param name="vkCode">Windows 虚拟键码</param>
+    /// <param name="isExtended">是否是扩展键 (RI_KEY_E0 标志)</param>
     public static uint ToKeySym(ushort vkCode, bool isExtended)
     {
-        // 字母 A-Z
+        // 字母 A-Z -> 小写 a-z (X11 KeySym 使用小写)
         if (vkCode >= 0x41 && vkCode <= 0x5A)
-            return (uint)(vkCode + 0x20); // 转换为小写 ASCII
+            return (uint)(vkCode + 0x20);
 
-        // 数字 0-9
+        // 数字 0-9 (主键盘)
         if (vkCode >= 0x30 && vkCode <= 0x39)
-            return (uint)vkCode; // ASCII 数字
+            return (uint)vkCode;
 
         // 功能键 F1-F12
         if (vkCode >= 0x70 && vkCode <= 0x7B)
-            return (uint)(0xFFBE + (vkCode - 0x70)); // XK_F1 - XK_F12
+            return (uint)(0xFFBE + (vkCode - 0x70));
 
-        // 特殊键映射
+        // 扩展键的特殊处理 (RI_KEY_E0 标志)
+        // 某些键在扩展模式下有不同映射
+        if (isExtended)
+        {
+            switch (vkCode)
+            {
+                case 0x0D: return 0xFF8D;  // Numpad Enter (扩展) -> XK_KP_Enter
+                case 0x6F: return 0xFFAF;  // Numpad Divide (扩展) -> XK_KP_Divide
+                // 方向键和编辑键在扩展模式下 VK 码相同，映射不变
+            }
+        }
+
+        // 非扩展键的默认映射
         return vkCode switch
         {
+            // 编辑键
             0x08 => 0xFF08,    // Backspace -> XK_BackSpace
             0x09 => 0xFF09,    // Tab -> XK_Tab
             0x0D => 0xFF0D,    // Enter -> XK_Return
@@ -36,10 +52,14 @@ public static class KeyMapping
             0x23 => 0xFF57,    // End -> XK_End
             0x21 => 0xFF55,    // Page Up -> XK_Page_Up
             0x22 => 0xFF56,    // Page Down -> XK_Page_Down
+
+            // 方向键
             0x25 => 0xFF51,    // Left Arrow -> XK_Left
             0x26 => 0xFF52,    // Up Arrow -> XK_Up
             0x27 => 0xFF53,    // Right Arrow -> XK_Right
             0x28 => 0xFF54,    // Down Arrow -> XK_Down
+
+            // 其他特殊键
             0x2C => 0xFF61,    // Print Screen -> XK_Print
             0x91 => 0xFF13,    // Scroll Lock -> XK_Scroll_Lock
             0x13 => 0xFF14,    // Pause -> XK_Pause
@@ -62,21 +82,25 @@ public static class KeyMapping
             0x6E => 0xFFAE,    // Decimal -> XK_KP_Decimal
             0x6F => 0xFFAF,    // Divide -> XK_KP_Divide
 
-            // 修饰键
-            0x10 => 0xFFE1,    // Shift Left -> XK_Shift_L
-            0xA0 => 0xFFE1,    // Shift Left (explicit)
+            // 修饰键 (通用 VK 码)
+            0x10 => 0xFFE1,    // Shift -> XK_Shift_L
+            0x11 => 0xFFE3,    // Control -> XK_Control_L
+            0x12 => 0xFFE9,    // Alt -> XK_Alt_L
+
+            // 修饰键 (具体左/右 VK 码)
+            0xA0 => 0xFFE1,    // Shift Left -> XK_Shift_L
             0xA1 => 0xFFE2,    // Shift Right -> XK_Shift_R
-            0x11 => 0xFFE3,    // Control Left -> XK_Control_L
-            0xA2 => 0xFFE3,    // Control Left (explicit)
+            0xA2 => 0xFFE3,    // Control Left -> XK_Control_L
             0xA3 => 0xFFE4,    // Control Right -> XK_Control_R
-            0x12 => 0xFFE9,    // Alt Left -> XK_Alt_L
-            0xA4 => 0xFFE9,    // Alt Left (explicit)
+            0xA4 => 0xFFE9,    // Alt Left -> XK_Alt_L
             0xA5 => 0xFFEA,    // Alt Right -> XK_Alt_R
+
+            // Windows 键
             0x5B => 0xFFEB,    // Windows Left -> XK_Super_L
             0x5C => 0xFFEC,    // Windows Right -> XK_Super_R
             0x5D => 0xFF67,    // Menu -> XK_Menu
 
-            // 符号键
+            // 符号键 (US 键盘布局)
             0xBA => 0x003B,    // ;: -> semicolon
             0xBB => 0x003D,    // =+ -> equal
             0xBC => 0x002C,    // ,< -> comma
@@ -89,10 +113,11 @@ public static class KeyMapping
             0xDD => 0x005D,    // ]} -> bracketright
             0xDE => 0x0027,    // '" -> apostrophe
 
-            // Caps Lock
+            // Lock 键
             0x14 => 0xFFE5,    // Caps Lock -> XK_Caps_Lock
+            0x90 => 0xFF7F,    // Num Lock -> XK_Num_Lock
 
-            // 默认返回虚拟键码
+            // 默认返回虚拟键码（未知键）
             _ => vkCode
         };
     }

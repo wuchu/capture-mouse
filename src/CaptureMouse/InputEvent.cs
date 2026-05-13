@@ -41,7 +41,7 @@ public class InputEvent
     public int Y { get; set; }
     
     /// <summary>
-    /// 鼠标按键：1=左键, 2=右键, 4=中键
+    /// 鼠标按键 (VNC 掩码): 1=左键, 2=中键, 4=右键
     /// </summary>
     public int Button { get; set; }
     
