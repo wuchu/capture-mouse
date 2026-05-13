@@ -508,7 +508,7 @@ public class VncClient : IDisposable
         {
             while (_receiveCts != null && !_receiveCts.Token.IsCancellationRequested)
             {
-                if (_stream == null || !_tcpClient?.Connected ?? true)
+                if (_stream == null || _tcpClient?.Connected != true)
                     break;
 
                 // 读取消息类型
