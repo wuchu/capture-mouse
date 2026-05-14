@@ -18,6 +18,10 @@ namespace CaptureMouse;
 /// Server → Client: [2B g][2B p_len][p_len bytes p][p_len bytes server_key]
 /// Client → Server: [2B key_len][key_len bytes client_key][128B encrypted_creds]
 /// Server → Client: [4B auth_result]
+/// 
+/// 重要: VNC 协议使用大端序 (big-endian / network byte order) 传输所有多字节值。
+/// .NET 的 BigInteger 构造函数和 ToByteArray() 使用小端序 (little-endian)，
+/// 因此必须在读取和发送时进行字节序转换。
 /// </summary>
 public static class AppleVncAuth
 {
@@ -48,16 +52,17 @@ public static class AppleVncAuth
                 return false;
             }
 
-            // Step 3: 读取 prime p (pLen bytes)
+            // Step 3: 读取 prime p (pLen bytes, big-endian)
+            // 服务器发送的是大端序字节，需要反转为小端序后才能构造 BigInteger
             byte[] pBytes = new byte[pLen];
             await ReadExactAsync(stream, pBytes, ct);
-            BigInteger p = new BigInteger(pBytes, isUnsigned: true);
+            BigInteger p = BigEndianToBigInteger(pBytes);
             Logger.Info($"DH prime 已读取 ({pLen} bytes)");
 
-            // Step 4: 读取服务器公钥 (pLen bytes, 长度等于 prime 长度)
+            // Step 4: 读取服务器公钥 (pLen bytes, big-endian)
             byte[] serverKeyBytes = new byte[pLen];
             await ReadExactAsync(stream, serverKeyBytes, ct);
-            BigInteger serverPublicKey = new BigInteger(serverKeyBytes, isUnsigned: true);
+            BigInteger serverPublicKey = BigEndianToBigInteger(serverKeyBytes);
             Logger.Info($"服务器 DH 公钥已读取 ({pLen} bytes)");
 
             // Step 5: 执行 DH 密钥交换
@@ -88,15 +93,17 @@ public static class AppleVncAuth
 
         // 计算客户端公钥: A = g^a mod p
         BigInteger clientPublicKey = BigInteger.ModPow(gBig, a, p);
-        byte[] clientPublicKeyBytes = PadToLength(clientPublicKey.ToByteArray(isUnsigned: true), pLen);
+        // 转换为大端序字节发送给服务器
+        byte[] clientPublicKeyBytes = BigIntegerToBigEndian(clientPublicKey, pLen);
         Logger.Info($"客户端公钥长度: {clientPublicKeyBytes.Length}");
 
         // 计算共享密钥: K = serverPublicKey^a mod p
         BigInteger sharedSecret = BigInteger.ModPow(serverPublicKey, a, p);
-        byte[] sharedSecretBytes = sharedSecret.ToByteArray(isUnsigned: true);
+        // 转换为大端序字节用于派生 AES 密钥 (服务器端使用大端序计算 MD5)
+        byte[] sharedSecretBytes = BigIntegerToBigEndian(sharedSecret, pLen);
         Logger.Info($"共享密钥长度: {sharedSecretBytes.Length}");
 
-        // 派生 AES 密钥: MD5(sharedSecret)
+        // 派生 AES 密钥: MD5(sharedSecret in big-endian, padded to pLen)
         byte[] aesKey;
         using (var md5 = MD5.Create())
         {
@@ -156,14 +163,49 @@ public static class AppleVncAuth
     }
 
     /// <summary>
-    /// 将字节数组填充到指定长度（前补零）
+    /// 将大端序字节数组转换为 BigInteger
+    /// VNC 协议传输使用大端序，.NET BigInteger 使用小端序
     /// </summary>
-    private static byte[] PadToLength(byte[] data, int targetLength)
+    private static BigInteger BigEndianToBigInteger(byte[] bigEndianBytes)
     {
-        if (data.Length >= targetLength) return data;
-        byte[] padded = new byte[targetLength];
-        Array.Copy(data, 0, padded, targetLength - data.Length, data.Length);
-        return padded;
+        // 复制后反转字节序: 大端序 → 小端序
+        byte[] le = new byte[bigEndianBytes.Length + 1]; // +1 确保无符号（末尾零字节）
+        for (int i = 0; i < bigEndianBytes.Length; i++)
+        {
+            le[i] = bigEndianBytes[bigEndianBytes.Length - 1 - i];
+        }
+        // le[bigEndianBytes.Length] = 0 已默认初始化
+        return new BigInteger(le);
+    }
+
+    /// <summary>
+    /// 将 BigInteger 转换为指定长度的大端序字节数组
+    /// VNC 协议传输使用大端序，.NET BigInteger.ToByteArray() 返回小端序
+    /// </summary>
+    private static byte[] BigIntegerToBigEndian(BigInteger value, int targetLength)
+    {
+        byte[] le = value.ToByteArray(isUnsigned: true);
+        // 反转字节序: 小端序 → 大端序
+        byte[] be = new byte[targetLength];
+        int copyStart = targetLength - le.Length;
+        if (copyStart < 0)
+        {
+            // 值太大，截断高位字节（理论上 DH 结果不会出现此情况）
+            Logger.Warning($"BigInteger 值超出目标长度 {targetLength}，截断高位字节");
+            for (int i = 0; i < targetLength; i++)
+            {
+                be[targetLength - 1 - i] = le[i]; // 从低位开始复制
+            }
+        }
+        else
+        {
+            // 正常情况：高位补零
+            for (int i = 0; i < le.Length; i++)
+            {
+                be[copyStart + i] = le[le.Length - 1 - i]; // 反转：小端序[0]是大端序的末尾
+            }
+        }
+        return be;
     }
 
     /// <summary>
