@@ -148,6 +148,12 @@ class Program
                 Console.WriteLine($"[错误] {error}");
             };
 
+            vncClient.RemoteDisconnected += (s, e) =>
+            {
+                Logger.Warning("macOS 端断开连接!");
+                Console.WriteLine("\n!!! macOS 端已断开连接，键鼠控制权已恢复 !!!\n");
+            };
+
             VncTestMenu(vncClient);
         }
         catch (Exception ex)

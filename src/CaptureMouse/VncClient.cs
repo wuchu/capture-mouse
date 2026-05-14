@@ -49,6 +49,12 @@ public class VncClient : IDisposable
     public event EventHandler<string>? ErrorOccurred;
 
     /// <summary>
+    /// 远程端主动断开连接时触发（macOS 端关闭屏幕共享等）
+    /// Windows 端应在此事件中恢复键鼠控制权
+    /// </summary>
+    public event EventHandler? RemoteDisconnected;
+
+    /// <summary>
     /// 连接到 VNC 服务器
     /// </summary>
     public async Task<bool> ConnectAsync(string host, int port, string username, string password, CancellationToken ct = default)
@@ -307,17 +313,9 @@ public class VncClient : IDisposable
         bool supportsVncAuth = Array.Exists(securityTypes, t => t == 2);    // Standard VNC
         bool supportsNone = Array.Exists(securityTypes, t => t == 1);       // None
 
-        if (supportsAppleAuth)
+        if (supportsVncAuth)
         {
-            // Apple VNC 认证 (类型 30) - macOS Screen Sharing 默认
-            Logger.Debug("选择 Apple VNC 认证 (类型 30)");
-            await _stream!.WriteAsync(new byte[] { 30 }, ct);
-
-            return await AppleVncAuth.AuthenticateAsync(_stream!, _username, password, ct);
-        }
-        else if (supportsVncAuth)
-        {
-            // 选择 VNC 认证 (类型 2)
+            // 优先使用标准 VNC 认证 (Type 2)
             Logger.Debug("选择 VNC 认证 (类型 2)");
             await _stream!.WriteAsync(new byte[] { 2 }, ct);
 
@@ -340,6 +338,22 @@ public class VncClient : IDisposable
                 Logger.Error($"VNC 认证失败，结果码: {result}");
                 return false;
             }
+        }
+        else if (supportsAppleAuth)
+        {
+            // macOS Screen Sharing 只启用了 Apple 专有认证 (Type 30)
+            // Apple 的专有 DH 认证协议未公开，需要用户启用 VNC 密码
+            Logger.Warning("macOS 仅提供 Apple 专有认证 (Type 30)，当前版本不支持");
+            var helpMsg =
+                "macOS 仅启用 Apple 专有认证，暂不支持。\n" +
+                "请在 macOS 上设置 VNC 密码:\n" +
+                "  1. 系统设置 -> 通用 -> 共享 -> 屏幕共享\n" +
+                "  2. 点击 (i) 信息按钮\n" +
+                "  3. 在「VNC 显示器的密码」处设置密码\n" +
+                "  4. 重新连接，输入该 VNC 密码（不需要用户名）";
+            Logger.Warning(helpMsg);
+            ErrorOccurred?.Invoke(this, helpMsg);
+            return false;
         }
         else if (supportsNone)
         {
@@ -552,18 +566,31 @@ public class VncClient : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // 正常取消，忽略
+            // 正常取消（本地主动断开），忽略
+            Logger.Debug("接收循环被取消（本地断开）");
+            return;
         }
-        catch (IOException)
+        catch (IOException ex)
         {
-            Logger.Info("连接已断开");
+            // macOS 端主动断开连接
+            Logger.Info($"远程端断开连接: {ex.Message}");
+            OnRemoteDisconnected();
+            return;
         }
         catch (Exception ex)
         {
-            Logger.Error("接收循环异常", ex);
+            // 其他异常也视为断连
+            Logger.Error("接收循环异常，视为远程断开", ex);
+            OnRemoteDisconnected();
+            return;
         }
 
-        Logger.Debug("服务器消息接收循环已停止");
+        // 循环正常退出但非取消，说明连接已断
+        if (_receiveCts == null || !_receiveCts.Token.IsCancellationRequested)
+        {
+            Logger.Info("连接已断开（循环退出）");
+            OnRemoteDisconnected();
+        }
     }
 
     /// <summary>
@@ -667,6 +694,31 @@ public class VncClient : IDisposable
         }
 
         return buffer;
+    }
+
+    /// <summary>
+    /// 远程端断开连接时的处理
+    /// 清理连接并触发事件，让 Windows 端恢复键鼠控制权
+    /// </summary>
+    private void OnRemoteDisconnected()
+    {
+        Logger.Warning("!!! 远程端断开连接，恢复本地键鼠控制权 !!!");
+
+        // 清理连接资源（不触发 Cancel，因为已经断开了）
+        lock (_lock)
+        {
+            _stream?.Close();
+            _tcpClient?.Close();
+            _stream = null;
+            _tcpClient = null;
+        }
+
+        // 重置按键状态
+        _currentButtonMask = 0;
+
+        // 触发事件
+        ConnectionStateChanged?.Invoke(this, false);
+        RemoteDisconnected?.Invoke(this, EventArgs.Empty);
     }
 
     public void Dispose()
