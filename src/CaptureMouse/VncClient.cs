@@ -313,9 +313,17 @@ public class VncClient : IDisposable
         bool supportsVncAuth = Array.Exists(securityTypes, t => t == 2);    // Standard VNC
         bool supportsNone = Array.Exists(securityTypes, t => t == 1);       // None
 
-        if (supportsVncAuth)
+        if (supportsAppleAuth)
         {
-            // 优先使用标准 VNC 认证 (Type 2)
+            // Apple VNC 认证 (Type 30) - macOS Screen Sharing 默认
+            Logger.Debug("选择 Apple VNC 认证 (类型 30)");
+            await _stream!.WriteAsync(new byte[] { 30 }, ct);
+
+            return await AppleVncAuth.AuthenticateAsync(_stream!, _username, password, ct);
+        }
+        else if (supportsVncAuth)
+        {
+            // 标准VNC 认证 (Type 2)
             Logger.Debug("选择 VNC 认证 (类型 2)");
             await _stream!.WriteAsync(new byte[] { 2 }, ct);
 
@@ -338,22 +346,6 @@ public class VncClient : IDisposable
                 Logger.Error($"VNC 认证失败，结果码: {result}");
                 return false;
             }
-        }
-        else if (supportsAppleAuth)
-        {
-            // macOS Screen Sharing 只启用了 Apple 专有认证 (Type 30)
-            // Apple 的专有 DH 认证协议未公开，需要用户启用 VNC 密码
-            Logger.Warning("macOS 仅提供 Apple 专有认证 (Type 30)，当前版本不支持");
-            var helpMsg =
-                "macOS 仅启用 Apple 专有认证，暂不支持。\n" +
-                "请在 macOS 上设置 VNC 密码:\n" +
-                "  1. 系统设置 -> 通用 -> 共享 -> 屏幕共享\n" +
-                "  2. 点击 (i) 信息按钮\n" +
-                "  3. 在「VNC 显示器的密码」处设置密码\n" +
-                "  4. 重新连接，输入该 VNC 密码（不需要用户名）";
-            Logger.Warning(helpMsg);
-            ErrorOccurred?.Invoke(this, helpMsg);
-            return false;
         }
         else if (supportsNone)
         {
