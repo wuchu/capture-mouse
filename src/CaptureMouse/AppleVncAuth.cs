@@ -111,7 +111,7 @@ public static class AppleVncAuth
                         {
                             byte[] pBytes = rawData.AsSpan(6, pLen).ToArray();
                             BigInteger p = new BigInteger(pBytes, isUnsigned: true);
-                            Logger.Info($"  p 已读取 ({pLen} 字节), p 前8字节: {BitConverter.ToString(pBytes, 0, Math.Min(8, pLen))}");
+                            Logger.Info($"  p 已读取 ({pLen} 字节), p 前8字节: {BitConverter.ToString(pBytes, 0, Math.Min(8, (int)pLen))}");
                             
                             int keyLenOffset = 6 + pLen;
                             ushort keyLen = BinaryPrimitives.ReadUInt16BigEndian(rawData.AsSpan(keyLenOffset));
