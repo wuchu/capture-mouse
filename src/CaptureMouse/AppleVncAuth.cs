@@ -58,12 +58,14 @@ public static class AppleVncAuth
             await ReadExactAsync(stream, pBytes, ct);
             BigInteger p = BigEndianToBigInteger(pBytes);
             Logger.Info($"DH prime 已读取 ({pLen} bytes)");
+            Logger.Debug($"DH prime (hex): {BitConverter.ToString(pBytes).Replace("-", " ")}");
 
             // Step 4: 读取服务器公钥 (pLen bytes, big-endian)
             byte[] serverKeyBytes = new byte[pLen];
             await ReadExactAsync(stream, serverKeyBytes, ct);
             BigInteger serverPublicKey = BigEndianToBigInteger(serverKeyBytes);
             Logger.Info($"服务器 DH 公钥已读取 ({pLen} bytes)");
+            Logger.Debug($"服务器公钥 (hex): {BitConverter.ToString(serverKeyBytes).Replace("-", " ")}");
 
             // Step 5: 执行 DH 密钥交换
             return await PerformDHExchange(stream, g, p, pLen, serverPublicKey, username, password, ct);
@@ -96,12 +98,14 @@ public static class AppleVncAuth
         // 转换为大端序字节发送给服务器
         byte[] clientPublicKeyBytes = BigIntegerToBigEndian(clientPublicKey, pLen);
         Logger.Info($"客户端公钥长度: {clientPublicKeyBytes.Length}");
+        Logger.Debug($"客户端公钥 (hex): {BitConverter.ToString(clientPublicKeyBytes).Replace("-", " ")}");
 
         // 计算共享密钥: K = serverPublicKey^a mod p
         BigInteger sharedSecret = BigInteger.ModPow(serverPublicKey, a, p);
         // 转换为大端序字节用于派生 AES 密钥 (服务器端使用大端序计算 MD5)
         byte[] sharedSecretBytes = BigIntegerToBigEndian(sharedSecret, pLen);
         Logger.Info($"共享密钥长度: {sharedSecretBytes.Length}");
+        Logger.Debug($"共享密钥 (hex): {BitConverter.ToString(sharedSecretBytes).Replace("-", " ")}");
 
         // 派生 AES 密钥: MD5(sharedSecret in big-endian, padded to pLen)
         byte[] aesKey;
@@ -110,6 +114,7 @@ public static class AppleVncAuth
             aesKey = md5.ComputeHash(sharedSecretBytes);
         }
         Logger.Info($"AES 密钥已派生 ({aesKey.Length * 8} bits)");
+        Logger.Debug($"AES 密钥 (hex): {BitConverter.ToString(aesKey).Replace("-", " ")}");
 
         // 加密凭据 (128 bytes = 用户名64B + 密码64B, AES-128-ECB)
         byte[] encryptedCredentials = EncryptCredentials(username, password, aesKey);
@@ -210,18 +215,28 @@ public static class AppleVncAuth
 
     /// <summary>
     /// AES-128-ECB 加密凭据 (128 bytes)
-    /// 用户名和密码各占 64 字节明文块，独立用 AES-128-ECB 加密
+    /// Apple VNC 凭据格式: [2B username_len][username padded to 62B][2B password_len][password padded to 62B]
+    /// 每个字段以 2 字节大端序长度前缀开始，后跟实际数据，剩余部分填零
     /// </summary>
     private static byte[] EncryptCredentials(string username, string password, byte[] aesKey)
     {
-        byte[] usernameBlock = new byte[64];
-        byte[] passwordBlock = new byte[64];
+        byte[] plaintext = new byte[128];
 
         byte[] usernameBytes = Encoding.UTF8.GetBytes(username ?? "");
         byte[] passwordBytes = Encoding.UTF8.GetBytes(password ?? "");
 
-        Array.Copy(usernameBytes, 0, usernameBlock, 0, Math.Min(usernameBytes.Length, 63));
-        Array.Copy(passwordBytes, 0, passwordBlock, 0, Math.Min(passwordBytes.Length, 63));
+        // 用户名: [2B 长度][数据][零填充] (共 64 字节)
+        int usernameLen = Math.Min(usernameBytes.Length, 62);
+        BinaryPrimitives.WriteUInt16BigEndian(plaintext.AsSpan(0), (ushort)usernameLen);
+        Array.Copy(usernameBytes, 0, plaintext, 2, usernameLen);
+
+        // 密码: [2B 长度][数据][零填充] (共 64 字节，从偏移 64 开始)
+        int passwordLen = Math.Min(passwordBytes.Length, 62);
+        BinaryPrimitives.WriteUInt16BigEndian(plaintext.AsSpan(64), (ushort)passwordLen);
+        Array.Copy(passwordBytes, 0, plaintext, 66, passwordLen);
+
+        Logger.Debug($"凭据明文: username_len={usernameLen}, password_len={passwordLen}");
+        Logger.Debug($"凭据明文 (hex): {BitConverter.ToString(plaintext).Replace("-", " ")}");
 
         using var aes = Aes.Create();
         aes.Key = aesKey;
@@ -231,9 +246,10 @@ public static class AppleVncAuth
         byte[] encrypted = new byte[128];
         using (var encryptor = aes.CreateEncryptor())
         {
-            encryptor.TransformBlock(usernameBlock, 0, 64, encrypted, 0);
-            encryptor.TransformBlock(passwordBlock, 0, 64, encrypted, 64);
+            encryptor.TransformBlock(plaintext, 0, 128, encrypted, 0);
         }
+
+        Logger.Debug($"凭据密文 (hex): {BitConverter.ToString(encrypted).Replace("-", " ")}");
 
         return encrypted;
     }
