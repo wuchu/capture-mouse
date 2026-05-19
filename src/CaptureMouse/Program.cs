@@ -427,9 +427,9 @@ class Program
 
         try
         {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             Logger.Debug("调用 ConnectAsync...");
-            var success = vncClient.ConnectAsync(host, 5900, username ?? "", password, cts.Token).Result;
+            var success = vncClient.ConnectAsync(host, 5900, username ?? "", password, cts.Token).GetAwaiter().GetResult();
 
             if (success)
             {

@@ -155,12 +155,16 @@ public class VncClient : IDisposable
         if (!IsConnected) return;
         if (ScreenWidth <= 0 || ScreenHeight <= 0) return;
 
-        // 将 Windows 像素坐标映射到 VNC 坐标 (0-65535)
-        // 使用 long 避免整数溢出
-        _currentVncX = (ushort)Math.Clamp((long)x * 65535 / ScreenWidth, 0, 65535);
-        _currentVncY = (ushort)Math.Clamp((long)y * 65535 / ScreenHeight, 0, 65535);
+        lock (_lock)
+        {
+            if (_stream == null) return;
 
-        SendMouseEvent(_currentButtonMask, _currentVncX, _currentVncY);
+            // 将 Windows 像素坐标映射到 VNC 坐标 (0-65535)
+            _currentVncX = (ushort)Math.Clamp((long)x * 65535 / ScreenWidth, 0, 65535);
+            _currentVncY = (ushort)Math.Clamp((long)y * 65535 / ScreenHeight, 0, 65535);
+
+            WriteMouseEvent(_currentButtonMask, _currentVncX, _currentVncY);
+        }
     }
 
     /// <summary>
@@ -172,13 +176,17 @@ public class VncClient : IDisposable
     {
         if (!IsConnected) return;
 
-        if (pressed)
-            _currentButtonMask |= (byte)button;
-        else
-            _currentButtonMask &= (byte)~button;
+        lock (_lock)
+        {
+            if (_stream == null) return;
 
-        // 发送按键事件时必须携带当前鼠标坐标
-        SendMouseEvent(_currentButtonMask, _currentVncX, _currentVncY);
+            if (pressed)
+                _currentButtonMask |= (byte)button;
+            else
+                _currentButtonMask &= (byte)~button;
+
+            WriteMouseEvent(_currentButtonMask, _currentVncX, _currentVncY);
+        }
     }
 
     /// <summary>
@@ -189,17 +197,20 @@ public class VncClient : IDisposable
     {
         if (!IsConnected) return;
 
-        // VNC 没有原生滚轮事件，模拟为按键 5(上) 和 4(下) 的按下+释放
-        // 或者通过中键点击模拟，这里使用 button 5/4
-        if (delta > 0)
+        lock (_lock)
         {
-            SendMouseEvent((byte)(_currentButtonMask | 8), _currentVncX, _currentVncY);  // scroll up
-            SendMouseEvent(_currentButtonMask, _currentVncX, _currentVncY);
-        }
-        else if (delta < 0)
-        {
-            SendMouseEvent((byte)(_currentButtonMask | 16), _currentVncX, _currentVncY); // scroll down
-            SendMouseEvent(_currentButtonMask, _currentVncX, _currentVncY);
+            if (_stream == null) return;
+
+            if (delta > 0)
+            {
+                WriteMouseEvent((byte)(_currentButtonMask | 8), _currentVncX, _currentVncY);  // scroll up
+                WriteMouseEvent(_currentButtonMask, _currentVncX, _currentVncY);
+            }
+            else if (delta < 0)
+            {
+                WriteMouseEvent((byte)(_currentButtonMask | 16), _currentVncX, _currentVncY); // scroll down
+                WriteMouseEvent(_currentButtonMask, _currentVncX, _currentVncY);
+            }
         }
     }
 
@@ -234,28 +245,23 @@ public class VncClient : IDisposable
     }
 
     /// <summary>
-    /// 发送鼠标事件（内部）
+    /// 写入鼠标事件到流（调用者必须持有 _lock）
     /// </summary>
-    private void SendMouseEvent(byte buttonMask, ushort x, ushort y)
+    private void WriteMouseEvent(byte buttonMask, ushort x, ushort y)
     {
-        lock (_lock)
+        byte[] buffer = new byte[6];
+        buffer[0] = 5; // PointerEvent message type
+        buffer[1] = buttonMask;
+        BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(2), x);
+        BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(4), y);
+
+        try
         {
-            if (_stream == null) return;
-
-            byte[] buffer = new byte[6];
-            buffer[0] = 5; // PointerEvent message type
-            buffer[1] = buttonMask;
-            BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(2), x);
-            BinaryPrimitives.WriteUInt16BigEndian(buffer.AsSpan(4), y);
-
-            try
-            {
-                _stream.Write(buffer);
-            }
-            catch (IOException ex)
-            {
-                Logger.Error("发送鼠标事件失败", ex);
-            }
+            _stream!.Write(buffer);
+        }
+        catch (IOException ex)
+        {
+            Logger.Error("发送鼠标事件失败", ex);
         }
     }
 
@@ -297,6 +303,12 @@ public class VncClient : IDisposable
             // 读取失败原因长度和原因
             byte[] reasonLenBuffer = await ReadExactAsync(4, ct);
             int reasonLen = BinaryPrimitives.ReadInt32BigEndian(reasonLenBuffer);
+            if (reasonLen < 0 || reasonLen > 65536)
+            {
+                Logger.Error($"无效的拒绝原因长度: {reasonLen}");
+                ErrorOccurred?.Invoke(this, "服务器发送了无效的拒绝原因");
+                return false;
+            }
             byte[] reasonBuffer = await ReadExactAsync(reasonLen, ct);
             string reason = Encoding.UTF8.GetString(reasonBuffer);
             Logger.Error($"服务器拒绝连接: {reason}");
@@ -387,6 +399,10 @@ public class VncClient : IDisposable
         using var encryptor = des.CreateEncryptor();
         byte[] response = new byte[16];
         encryptor.TransformBlock(challenge, 0, 16, response, 0);
+
+        // 清除密钥材料
+        Array.Clear(key, 0, key.Length);
+        Array.Clear(passwordBytes, 0, passwordBytes.Length);
 
         return response;
     }
@@ -525,30 +541,32 @@ public class VncClient : IDisposable
     {
         Logger.Debug("服务器消息接收循环已启动");
 
+        var token = _receiveCts?.Token ?? CancellationToken.None;
+
         try
         {
-            while (_receiveCts != null && !_receiveCts.Token.IsCancellationRequested)
+            while (!token.IsCancellationRequested)
             {
                 if (_stream == null || _tcpClient?.Connected != true)
                     break;
 
                 // 读取消息类型
-                byte[] msgTypeBuf = await ReadExactAsync(1, _receiveCts.Token);
+                byte[] msgTypeBuf = await ReadExactAsync(1, token);
                 byte msgType = msgTypeBuf[0];
 
                 switch (msgType)
                 {
                     case 0: // FramebufferUpdate
-                        await HandleFramebufferUpdate(_receiveCts.Token);
+                        await HandleFramebufferUpdate(token);
                         break;
                     case 1: // SetColourMapEntries
-                        await HandleSetColourMapEntries(_receiveCts.Token);
+                        await HandleSetColourMapEntries(token);
                         break;
                     case 2: // Bell
                         Logger.Debug("服务器: Bell");
                         break;
                     case 3: // ServerCutText
-                        await HandleServerCutText(_receiveCts.Token);
+                        await HandleServerCutText(token);
                         break;
                     default:
                         Logger.Warning($"未知服务器消息类型: {msgType}");
@@ -578,7 +596,7 @@ public class VncClient : IDisposable
         }
 
         // 循环正常退出但非取消，说明连接已断
-        if (_receiveCts == null || !_receiveCts.Token.IsCancellationRequested)
+        if (!token.IsCancellationRequested)
         {
             Logger.Info("连接已断开（循环退出）");
             OnRemoteDisconnected();
@@ -601,7 +619,12 @@ public class VncClient : IDisposable
             int encoding = BinaryPrimitives.ReadInt32BigEndian(rectHeader.AsSpan(8));
 
             // 根据编码类型跳过数据
-            int dataSize = GetEncodingDataSize(encoding, rectHeader);
+            long dataSize = GetEncodingDataSize(encoding, rectHeader);
+            if (dataSize < 0)
+            {
+                Logger.Warning($"不支持的编码类型 {encoding}，无法确定数据大小，断开连接");
+                throw new IOException($"Unsupported encoding: {encoding}");
+            }
             if (dataSize > 0)
             {
                 await SkipBytesAsync(dataSize, ct);
@@ -612,17 +635,17 @@ public class VncClient : IDisposable
     /// <summary>
     /// 获取编码数据大小
     /// </summary>
-    private int GetEncodingDataSize(int encoding, byte[] rectHeader)
+    private long GetEncodingDataSize(int encoding, byte[] rectHeader)
     {
         ushort width = BinaryPrimitives.ReadUInt16BigEndian(rectHeader.AsSpan(4));
         ushort height = BinaryPrimitives.ReadUInt16BigEndian(rectHeader.AsSpan(6));
 
         return encoding switch
         {
-            0 => width * height * 4,   // Raw: width * height * bytesPerPixel
-            1 => 0,                     // CopyRect: 4 bytes (已经包含在头部中)
-            -239 => 0,                  // Cursor pseudo-encoding: 忽略
-            _ => 0                      // 未知编码，忽略
+            0 => (long)width * height * 4,  // Raw: width * height * bytesPerPixel (long to avoid overflow)
+            1 => 4,                          // CopyRect: srcX(2) + srcY(2)
+            -239 => width * height * 4,      // Cursor pseudo-encoding: pixel data + mask
+            _ => -1                          // Unknown encoding: cannot determine size, must disconnect
         };
     }
 
@@ -652,16 +675,16 @@ public class VncClient : IDisposable
     /// <summary>
     /// 跳过指定字节数
     /// </summary>
-    private async Task SkipBytesAsync(int count, CancellationToken ct)
+    private async Task SkipBytesAsync(long count, CancellationToken ct)
     {
         if (count <= 0) return;
 
         byte[] buffer = new byte[Math.Min(count, 8192)];
-        int remaining = count;
+        long remaining = count;
 
         while (remaining > 0)
         {
-            int toRead = Math.Min(remaining, buffer.Length);
+            int toRead = (int)Math.Min(remaining, buffer.Length);
             int read = await _stream!.ReadAsync(buffer.AsMemory(0, toRead), ct);
             if (read == 0) throw new IOException("连接已关闭");
             remaining -= read;

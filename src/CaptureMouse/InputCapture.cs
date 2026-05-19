@@ -79,7 +79,7 @@ public class InputCapture : NativeWindow, IDisposable
         public RAWKEYBOARD keyboard;
     }
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterRawInputDevices(RAWINPUTDEVICE[] pRawInputDevices, uint uiNumDevices, uint cbSize);
 
     [DllImport("user32.dll")]
@@ -112,7 +112,7 @@ public class InputCapture : NativeWindow, IDisposable
 
     #endregion
 
-    private bool _isCapturing = false;
+    private volatile bool _isCapturing = false;
     private bool _disposed = false;
     private DateTime _lastMouseMove = DateTime.MinValue;
     private readonly TimeSpan _mouseThrottle = TimeSpan.FromMilliseconds(8); // ~120fps
@@ -213,6 +213,7 @@ public class InputCapture : NativeWindow, IDisposable
             {
                 int error = Marshal.GetLastWin32Error();
                 Logger.Error($"注册 Raw Input 设备失败, Win32 错误码: {error}");
+                DestroyHandle();
                 return false;
             }
 
@@ -361,7 +362,7 @@ public class InputCapture : NativeWindow, IDisposable
                     Type = InputEventType.MouseMove,
                     Timestamp = InputEvent.GetTimestamp(),
                     X = pt.X,
-                    Y = pt.Y
+                    Y = pt.Y,
                 });
             }
         }

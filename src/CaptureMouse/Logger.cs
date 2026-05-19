@@ -24,18 +24,25 @@ public static class Logger
 {
     private static readonly object _lock = new();
     private static string? _logFile;
-    private static bool _initialized = false;
+    private static int _initialized; // 0 = not initialized, 1 = initialized
+    private static StreamWriter? _writer;
+    private static long _logFileSize;
+    private const long MaxLogFileSize = 50 * 1024 * 1024; // 50MB
+
+    /// <summary>
+    /// 最低日志级别，低于此级别的日志将被忽略
+    /// </summary>
+    public static LogLevel MinimumLevel { get; set; } = LogLevel.Debug;
 
     /// <summary>
     /// 初始化日志系统
     /// </summary>
     public static void Initialize()
     {
-        if (_initialized) return;
+        if (Interlocked.CompareExchange(ref _initialized, 1, 0) != 0) return;
 
         try
         {
-            // 日志文件放在可执行文件同级目录的 logs 文件夹下
             var exePath = Environment.ProcessPath ?? AppContext.BaseDirectory;
             var exeDir = Path.GetDirectoryName(exePath) ?? AppContext.BaseDirectory;
             var logDir = Path.Combine(exeDir, "logs");
@@ -45,15 +52,14 @@ public static class Logger
             var timestamp = DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss");
             _logFile = Path.Combine(logDir, $"CaptureMouse_{timestamp}.log");
 
-            // 写入启动标记
+            _writer = new StreamWriter(_logFile, true, Encoding.UTF8) { AutoFlush = true };
+
             Log(LogLevel.Info, "=== CaptureMouse 启动 ===");
             Log(LogLevel.Info, $"日志文件: {_logFile}");
             Log(LogLevel.Info, $"操作系统: {Environment.OSVersion}");
             Log(LogLevel.Info, $"CLR 版本: {Environment.Version}");
             Log(LogLevel.Info, $"工作目录: {Environment.CurrentDirectory}");
             Log(LogLevel.Info, $"命令行: {Environment.CommandLine}");
-
-            _initialized = true;
         }
         catch (Exception ex)
         {
@@ -131,8 +137,6 @@ public static class Logger
         }
 
         Log(LogLevel.Fatal, sb.ToString());
-
-        // 确保致命错误被写入
         Flush();
     }
 
@@ -157,11 +161,16 @@ public static class Logger
     /// </summary>
     public static void Flush()
     {
-        // 日志立即写入，无需刷新
+        lock (_lock)
+        {
+            _writer?.Flush();
+        }
     }
 
     private static void Log(LogLevel level, string message)
     {
+        if (level < MinimumLevel) return;
+
         var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
         var threadId = Thread.CurrentThread.ManagedThreadId;
         var levelStr = level.ToString().ToUpper();
@@ -173,11 +182,12 @@ public static class Logger
             Console.WriteLine(logLine);
 
             // 写入文件
-            if (_logFile != null)
+            if (_writer != null && _logFileSize < MaxLogFileSize)
             {
                 try
                 {
-                    File.AppendAllText(_logFile, logLine + Environment.NewLine);
+                    _writer.WriteLine(logLine);
+                    _logFileSize += logLine.Length + Environment.NewLine.Length;
                 }
                 catch
                 {

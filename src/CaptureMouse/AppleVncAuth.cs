@@ -58,14 +58,12 @@ public static class AppleVncAuth
             await ReadExactAsync(stream, pBytes, ct);
             BigInteger p = BigEndianToBigInteger(pBytes);
             Logger.Info($"DH prime 已读取 ({pLen} bytes)");
-            Logger.Debug($"DH prime (hex): {BitConverter.ToString(pBytes).Replace("-", " ")}");
 
             // Step 4: 读取服务器公钥 (pLen bytes, big-endian)
             byte[] serverKeyBytes = new byte[pLen];
             await ReadExactAsync(stream, serverKeyBytes, ct);
             BigInteger serverPublicKey = BigEndianToBigInteger(serverKeyBytes);
             Logger.Info($"服务器 DH 公钥已读取 ({pLen} bytes)");
-            Logger.Debug($"服务器公钥 (hex): {BitConverter.ToString(serverKeyBytes).Replace("-", " ")}");
 
             // Step 5: 执行 DH 密钥交换
             return await PerformDHExchange(stream, g, p, pLen, serverPublicKey, username, password, ct);
@@ -92,20 +90,19 @@ public static class AppleVncAuth
         BigInteger a = new BigInteger(privateKeyBytes, isUnsigned: true);
         if (a.Sign <= 0) a = BigInteger.Abs(a);
         if (a >= p) a = a % (p - BigInteger.One) + BigInteger.One;
+        Array.Clear(privateKeyBytes, 0, privateKeyBytes.Length);
 
         // 计算客户端公钥: A = g^a mod p
         BigInteger clientPublicKey = BigInteger.ModPow(gBig, a, p);
         // 转换为大端序字节发送给服务器
         byte[] clientPublicKeyBytes = BigIntegerToBigEndian(clientPublicKey, pLen);
         Logger.Info($"客户端公钥长度: {clientPublicKeyBytes.Length}");
-        Logger.Debug($"客户端公钥 (hex): {BitConverter.ToString(clientPublicKeyBytes).Replace("-", " ")}");
 
         // 计算共享密钥: K = serverPublicKey^a mod p
         BigInteger sharedSecret = BigInteger.ModPow(serverPublicKey, a, p);
         // 转换为大端序字节用于派生 AES 密钥 (服务器端使用大端序计算 MD5)
         byte[] sharedSecretBytes = BigIntegerToBigEndian(sharedSecret, pLen);
         Logger.Info($"共享密钥长度: {sharedSecretBytes.Length}");
-        Logger.Debug($"共享密钥 (hex): {BitConverter.ToString(sharedSecretBytes).Replace("-", " ")}");
 
         // 派生 AES 密钥: MD5(sharedSecret in big-endian, padded to pLen)
         byte[] aesKey;
@@ -113,8 +110,8 @@ public static class AppleVncAuth
         {
             aesKey = md5.ComputeHash(sharedSecretBytes);
         }
+        Array.Clear(sharedSecretBytes, 0, sharedSecretBytes.Length);
         Logger.Info($"AES 密钥已派生 ({aesKey.Length * 8} bits)");
-        Logger.Debug($"AES 密钥 (hex): {BitConverter.ToString(aesKey).Replace("-", " ")}");
 
         // 加密凭据 (128 bytes = 用户名64B + 密码64B, AES-128-ECB)
         byte[] encryptedCredentials = EncryptCredentials(username, password, aesKey);
@@ -236,7 +233,6 @@ public static class AppleVncAuth
         Array.Copy(passwordBytes, 0, plaintext, 66, passwordLen);
 
         Logger.Debug($"凭据明文: username_len={usernameLen}, password_len={passwordLen}");
-        Logger.Debug($"凭据明文 (hex): {BitConverter.ToString(plaintext).Replace("-", " ")}");
 
         using var aes = Aes.Create();
         aes.Key = aesKey;
@@ -249,7 +245,11 @@ public static class AppleVncAuth
             encryptor.TransformBlock(plaintext, 0, 128, encrypted, 0);
         }
 
-        Logger.Debug($"凭据密文 (hex): {BitConverter.ToString(encrypted).Replace("-", " ")}");
+        // 清除敏感数据
+        Array.Clear(plaintext, 0, plaintext.Length);
+        Array.Clear(usernameBytes, 0, usernameBytes.Length);
+        Array.Clear(passwordBytes, 0, passwordBytes.Length);
+        Array.Clear(aesKey, 0, aesKey.Length);
 
         return encrypted;
     }
